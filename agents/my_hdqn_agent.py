@@ -76,7 +76,7 @@ class hDQN():
     """
     def __init__(self,
                  optimizer_spec,
-                 num_goal=1,
+                 num_goal=4,
                  num_action=4 * 4,
                  replay_memory_size=10000,
                  batch_size=128):
@@ -87,10 +87,10 @@ class hDQN():
         self.num_action = num_action
         self.batch_size = batch_size
         # Construct meta-controller and controller
-        self.meta_controller = MetaController(4*4 + 4*4, 1).type(dtype)
-        self.target_meta_controller = MetaController(4*4 + 4*4, 1).type(dtype)
-        self.controller = Controller(4*4 + 4*4 + 4*4, num_action).type(dtype)
-        self.target_controller = Controller(4*4 + 4*4 + 4*4, num_action).type(dtype)
+        self.meta_controller = MetaController(10*4 + 4*4, 4).type(dtype)
+        self.target_meta_controller = MetaController(10*4 + 4*4, 4).type(dtype)
+        self.controller = Controller(10*4 + 4*4 + 4, num_action).type(dtype)
+        self.target_controller = Controller(10*4 + 4*4 + 4, num_action).type(dtype)
         # Construct the optimizers for meta-controller and controller
         self.meta_optimizer = optimizer_spec.constructor(self.meta_controller.parameters(), **optimizer_spec.kwargs)
         self.ctrl_optimizer = optimizer_spec.constructor(self.controller.parameters(), **optimizer_spec.kwargs)
@@ -111,17 +111,17 @@ class hDQN():
     def get_intrinsic_reward(self, goal, state):
         return 1.0 if self.check_goal(goal, state) else 0.0
     
-    def select_goal(self, state, epsilon):
-        return 0
-        
-    # def select_goal(self, state, epilson):
-    #     sample = random.random()
-    #     if sample > epilson:
-    #         state = torch.from_numpy(state).type(dtype)
-    #         # Use volatile = True if variable is only used in inference mode, i.e. don’t save the history
-    #         return self.meta_controller(Variable(state, volatile=True)).data.max(1)[1].cpu()
-    #     else:
-    #         return torch.IntTensor([random.randrange(self.num_goal)])
+    def get_intrinsic_reward_lines(self, goal, extrinsic_reward):
+        return 1.0 if self.check_goal_lines(goal, extrinsic_reward) else 0.0
+         
+    def select_goal(self, state, epilson):
+        sample = random.random()
+        if sample > epilson:
+            state = torch.from_numpy(state).type(dtype)
+            # Use volatile = True if variable is only used in inference mode, i.e. don’t save the history
+            return self.meta_controller(Variable(state, volatile=True)).data.max(1)[1].cpu()
+        else:
+            return torch.IntTensor([random.randrange(self.num_goal)])
 
     def select_action(self, joint_state_goal, epilson):
         sample = random.random()

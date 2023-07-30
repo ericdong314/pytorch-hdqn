@@ -24,9 +24,9 @@ def one_hot_state(state):
     return np.expand_dims(state, axis=0)
 
 def one_hot_goal(goal):
-    num_rows, num_cols = 4, 4
-    goal = np.zeros(num_rows * num_cols, dtype=np.int8)  ### empty board
-    return np.expand_dims(goal, axis=0)
+    vector = np.zeros(4)  ### empty board
+    vector[goal] = 1.0
+    return np.expand_dims(vector, axis=0)
 
 def hdqn_learning(
     env,
@@ -60,6 +60,7 @@ def hdqn_learning(
         episode_rewards=np.zeros(num_episodes))
     n_thousand_episode = int(np.floor(num_episodes / 1000))
     # visits = np.zeros((n_thousand_episode, env.nS))
+    goals_selection = np.zeros((n_thousand_episode, 4))
     total_timestep = 0
     meta_timestep = 0
     # ctrl_timestep = defaultdict(int)
@@ -76,7 +77,8 @@ def hdqn_learning(
                 meta_timestep += 1
                 # Get annealing exploration rate (epislon) from exploration_schedule
                 meta_epsilon = exploration_schedule.value(total_timestep)
-                goal = agent.select_goal(encoded_current_state, meta_epsilon)   ### only 4 4 are used
+                goal = agent.select_goal(encoded_current_state, meta_epsilon)[0]
+                goals_selection[i_thousand_episode][goal] += 1
                 encoded_goal = one_hot_goal(goal)
 
                 total_extrinsic_reward = 0
@@ -97,11 +99,10 @@ def hdqn_learning(
                     # visits[i_thousand_episode][next_state-1] += 1
 
                     encoded_next_state = one_hot_state(next_state)
-                    intrinsic_reward = agent.get_intrinsic_reward(goal, next_state)
-                    if intrinsic_reward:
-                        print(f'intrinsic_reward: {intrinsic_reward}')
-                    # goal_reached = agent.check_goal_lines(goal, extrinsic_reward)
-                    goal_reached = agent.check_goal(goal, current_state)
+                    intrinsic_reward = agent.get_intrinsic_reward_lines(goal, extrinsic_reward)
+                    
+                    goal_reached = agent.check_goal_lines(goal, extrinsic_reward)
+                    # goal_reached = agent.check_goal(goal, current_state)
 
                     joint_next_state_goal = np.concatenate([encoded_next_state, encoded_goal], axis=1)
                     agent.ctrl_replay_memory.push(joint_state_goal, action, joint_next_state_goal, intrinsic_reward, done)
@@ -115,5 +116,7 @@ def hdqn_learning(
                 # Goal Finished
                 agent.meta_replay_memory.push(encoded_current_state, goal, encoded_next_state, total_extrinsic_reward, done)
             episode = i_thousand_episode*1000 + i_episode
-            print(f'steps: {total_timestep} episode: {episode + 1} reward: {stats.episode_rewards[episode]} average: {sum(stats.episode_rewards[:episode + 1])/episode + 1}')
+            if (episode + 1) % 1000 == 0:
+                print(f'steps: {total_timestep:6} episode: {episode + 1:6} reward: {stats.episode_rewards[episode]:3} average: {sum(stats.episode_rewards[:episode + 1])/episode + 1:3.2f}')
+                print(f'goals_selection: {goals_selection[i_thousand_episode]}')
     return agent, stats, {}
