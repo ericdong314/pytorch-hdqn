@@ -1,22 +1,15 @@
-import numpy as np
 import random
-from collections import namedtuple
-import my_hdqn_learning
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.autograd as autograd
+from collections import namedtuple
+
 
 from utils.replay_memory import ReplayMemory, Transition
 
-USE_CUDA = torch.cuda.is_available()
-dtype = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-class Variable(autograd.Variable):
-    def __init__(self, data, *args, **kwargs):
-        if USE_CUDA:
-            data = data.cuda()
-        super(Variable, self).__init__(data, *args, **kwargs)
 
 class Model(nn.Module):
     def __init__(self, in_features, out_features):
@@ -51,10 +44,10 @@ class hDQN():
         self.num_action = num_action
         self.batch_size = batch_size
         # Construct meta-controller and controller
-        self.meta_controller = Model(num_meta_in, num_goal).type(dtype)
-        self.target_meta_controller = Model(num_meta_in, num_goal).type(dtype)
-        self.controller = Model(num_meta_in + num_goal, num_action).type(dtype)
-        self.target_controller = Model(num_meta_in + num_goal, num_action).type(dtype)
+        self.meta_controller = Model(num_meta_in, num_goal).to(device)
+        self.target_meta_controller = Model(num_meta_in, num_goal).to(device)
+        self.controller = Model(num_meta_in + num_goal, num_action).to(device)
+        self.target_controller = Model(num_meta_in + num_goal, num_action).to(device)
         # Construct the optimizers for meta-controller and controller
         self.meta_optimizer = optimizer_spec.constructor(self.meta_controller.parameters(), **optimizer_spec.kwargs)
         self.ctrl_optimizer = optimizer_spec.constructor(self.controller.parameters(), **optimizer_spec.kwargs)
@@ -73,11 +66,11 @@ class hDQN():
         num, controller = [self.num_goal, self.meta_controller] if goal else [self.num_action, self.controller]
         sample = random.random()
         if sample > epilson:
-            state = torch.from_numpy(state).type(dtype)
-            # Use volatile = True if variable is only used in inference mode, i.e. don’t save the history
-            return controller(Variable(state, volatile=True)).data.max(1)[1].cpu()
+            state = torch.tensor(state, device=device, dtype=torch.float32)
+            with torch.no_grad():
+                return controller(state).data.max(1)[1]
         else:
-            return torch.IntTensor([random.randrange(num)])
+            return torch.tensor([random.randrange(num)], device=device, dtype=torch.long)
 
     def update_controller(self, gamma, meta=False):
         memory, model, target, optimizer = (
@@ -86,24 +79,25 @@ class hDQN():
         
         if len(memory) < self.batch_size:
             return
-        state_batch, goal_batch, next_state_batch, ex_reward_batch, done_mask = \
-            memory.sample(self.batch_size)
-        state_batch = Variable(torch.from_numpy(state_batch).type(dtype))
-        goal_batch = Variable(torch.from_numpy(goal_batch).long())
-        next_state_batch = Variable(torch.from_numpy(next_state_batch).type(dtype))
-        ex_reward_batch = Variable(torch.from_numpy(ex_reward_batch).type(dtype))
-        not_done_mask = Variable(torch.from_numpy(1 - done_mask)).type(dtype)
-        if USE_CUDA:
-            goal_batch = goal_batch.cuda()
+        state_batch, goal_batch, next_state_batch, ex_reward_batch, done_mask = memory.sample(self.batch_size)
+        state_batch = torch.tensor(state_batch, device=device, dtype=torch.float32)
+        goal_batch = torch.tensor(goal_batch, device=device)
+        next_state_batch = torch.tensor(next_state_batch, device=device, dtype=torch.float32)
+        ex_reward_batch = torch.tensor(ex_reward_batch, device=device)
+        not_done_mask = torch.tensor(1 - done_mask, device=device)
+
         # Compute current Q value, meta_controller takes only state and output value for every state-goal pair
         # We choose Q based on goal chosen.
         current_Q_values = model(state_batch).gather(1, goal_batch.unsqueeze(1))
         # Compute next Q value based on which goal gives max Q values
         # Detach variable from the current graph since we don't want gradients for next Q to propagated
-        next_max_q = target(next_state_batch).detach().max(1)[0]
+        with torch.no_grad():
+            next_max_q = target(next_state_batch).max(1)[0]
         next_Q_values = not_done_mask * next_max_q
+        
         # Compute the target of the current Q values
         target_Q_values = ex_reward_batch + (gamma * next_Q_values)
+        
         # Compute Bellman error (using Huber loss)
         criterion = nn.SmoothL1Loss()
         loss = criterion(current_Q_values, target_Q_values)
